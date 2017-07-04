@@ -8,16 +8,21 @@ import Tuple exposing (..)
 import Manifest exposing (..)
 import Rules exposing (rulesData)
 import ClientTypes exposing (..)
+import Graph exposing (Graph)
+import Graph.GraphViz as GraphViz
+import Graph.Node as Node exposing (Node)
+import Graph.Edge as Edge exposing (Edge)
 
 
 type alias Model =
     { engineModel : Engine.Model
-    , path : Path
+    , tree : Tree
+    , graph : Graph Node
     }
 
 
-type Path
-    = Path String (List Path)
+type Tree
+    = Tree String (List Tree)
 
 
 type Msg
@@ -49,9 +54,6 @@ init =
                 rules
                 |> Engine.changeWorld startingState
 
-        path =
-            getPath engineModel rules
-
         startingState =
             [ moveTo "Cottage"
             , loadScene "start"
@@ -68,66 +70,115 @@ init =
             ]
     in
         ( { engineModel = engineModel
-          , path = path
+          , tree = buildTree engineModel rules
+          , graph = buildGraph engineModel rules
           }
         , Cmd.none
         )
 
 
-getPath : Engine.Model -> Rules -> Path
-getPath startingEngineModel rules =
+getAllInteractables : Engine.Model -> List String
+getAllInteractables engineModel =
+    -- TODO/FIX
+    -- not completely true - the client can expose other interactables
+    -- such as the "exits" component or hypermedia text
+    -- Maybe need to ask the client for this list?
+    Engine.getCharactersInCurrentLocation engineModel
+        ++ Engine.getItemsInCurrentLocation engineModel
+        ++ Engine.getItemsInInventory engineModel
+        ++ Engine.getLocations engineModel
+
+
+worldChanged : Engine.Model -> Engine.Model -> Maybe Engine.Model
+worldChanged old new =
+    if
+        Engine.getItemsInCurrentLocation old
+            /= Engine.getItemsInCurrentLocation new
+            || Engine.getCharactersInCurrentLocation old
+            /= Engine.getCharactersInCurrentLocation new
+            || Engine.getItemsInInventory old
+            /= Engine.getItemsInInventory new
+            || Engine.getLocations old
+            /= Engine.getLocations new
+            || Engine.getCurrentLocation old
+            /= Engine.getCurrentLocation new
+            || Engine.getCurrentScene old
+            /= Engine.getCurrentScene new
+            || Engine.getEnding old
+            /= Engine.getEnding new
+    then
+        Just new
+    else
+        Nothing
+
+
+buildGraph : Engine.Model -> Rules -> Graph Node
+buildGraph startingEngineModel rules =
     let
-        getAllInteractables engineModel =
-            -- TODO/FIX
-            -- not completely true - the client can expose other interactables
-            -- such as the "exits" component or hypermedia text
-            -- Maybe need to ask the client for this list?
-            Engine.getCharactersInCurrentLocation engineModel
-                ++ Engine.getItemsInCurrentLocation engineModel
-                ++ Engine.getItemsInInventory engineModel
-                ++ Engine.getLocations engineModel
-
-        worldChanged old new =
-            if
-                Engine.getItemsInCurrentLocation old
-                    /= Engine.getItemsInCurrentLocation new
-                    || Engine.getCharactersInCurrentLocation old
-                    /= Engine.getCharactersInCurrentLocation new
-                    || Engine.getItemsInInventory old
-                    /= Engine.getItemsInInventory new
-                    || Engine.getLocations old
-                    /= Engine.getLocations new
-                    || Engine.getCurrentLocation old
-                    /= Engine.getCurrentLocation new
-                    || Engine.getCurrentScene old
-                    /= Engine.getCurrentScene new
-                    || Engine.getEnding old
-                    /= Engine.getEnding new
-            then
-                Just new
+        addIfUnique a list =
+            if List.member a list then
+                list
             else
-                Nothing
+                a :: list
 
+        recurOrStop name engineModel nodes =
+            if Engine.getEnding engineModel == Nothing then
+                addIfUnique (Node.fromName [ name ]) (checkAllInteractables engineModel nodes)
+            else
+                addIfUnique (Node.fromName [ name ++ " *Ending*" ]) nodes
+
+        findMatcingRule : Engine.Model -> String -> List Node -> List Node
+        findMatcingRule engineModel interactable nodes =
+            case Tuple.mapFirst (worldChanged engineModel) <| Engine.update interactable engineModel of
+                -- normal rule match with changes
+                ( Just newEngineModel, Just ruleName ) ->
+                    recurOrStop (interactable ++ " -> " ++ ruleName) newEngineModel nodes
+
+                ( Just newEngineModel, Nothing ) ->
+                    -- default rule match (take an item or move to a location)
+                    recurOrStop (interactable ++ " -> default (take / go)") newEngineModel nodes
+
+                ( Nothing, Just ruleName ) ->
+                    -- rule with no changes
+                    addIfUnique (Node.fromName [ interactable ++ " -> " ++ ruleName ]) nodes
+
+                ( Nothing, Nothing ) ->
+                    -- no matching rules
+                    nodes
+
+        checkAllInteractables engineModel nodes =
+            getAllInteractables engineModel
+                |> List.foldl (findMatcingRule engineModel) nodes
+
+        walkStory =
+            (,) [] <| checkAllInteractables startingEngineModel []
+    in
+        uncurry Graph.init walkStory
+
+
+buildTree : Engine.Model -> Rules -> Tree
+buildTree startingEngineModel rules =
+    let
         findMatcingRule engineModel interactable =
             case Tuple.mapFirst (worldChanged engineModel) <| Engine.update interactable engineModel of
                 ( Just newEngineModel, Just ruleName ) ->
                     Just <|
                         if Engine.getEnding newEngineModel == Nothing then
-                            Path (interactable ++ " -> " ++ ruleName) <|
+                            Tree (interactable ++ " -> " ++ ruleName) <|
                                 checkAllInteractables newEngineModel
                         else
-                            Path (interactable ++ " -> " ++ ruleName ++ " *Ending*") []
+                            Tree (interactable ++ " -> " ++ ruleName ++ " *Ending*") []
 
                 ( Just newEngineModel, Nothing ) ->
                     Just <|
                         if Engine.getEnding newEngineModel == Nothing then
-                            Path (interactable ++ " -> default (take / go)") <|
+                            Tree (interactable ++ " -> default (take / go)") <|
                                 checkAllInteractables newEngineModel
                         else
-                            Path (interactable ++ " -> default (take / go) *Ending*") []
+                            Tree (interactable ++ " -> default (take / go) *Ending*") []
 
                 ( Nothing, Just ruleName ) ->
-                    Just <| Path (interactable ++ " -> " ++ ruleName) []
+                    Just <| Tree (interactable ++ " -> " ++ ruleName) []
 
                 ( Nothing, Nothing ) ->
                     Nothing
@@ -136,7 +187,7 @@ getPath startingEngineModel rules =
             getAllInteractables engineModel
                 |> List.filterMap (findMatcingRule engineModel)
     in
-        Path "*Start*" <| checkAllInteractables startingEngineModel
+        Tree "*Start*" <| checkAllInteractables startingEngineModel
 
 
 getIds : List Entity -> List String
@@ -169,27 +220,31 @@ update msg model =
 
 view : Model -> Html Msg
 view model =
-    ol [] [ pathView model.path ]
-
-
-olStyle : Html.Attribute Msg
-olStyle =
-    style
-        [ ( "borderLeft", "1px solid lightgray" )
-        , ( "margin", "5px 25px" )
-        , ( "padding", "5px 25px" )
+    div []
+        [ h2 [] [ text "Graph:" ]
+        , textarea [ rows 30, cols 150 ] [ text <| GraphViz.string model.graph ]
+        , h2 [] [ text "Tree:" ]
+        , ol [] [ treeView model.tree ]
         ]
 
 
-pathView : Path -> Html Msg
-pathView path =
-    case path of
-        Path a [] ->
-            li [] [ text a ]
-
-        Path a path ->
-            li []
-                [ text a
-                , ol [ olStyle ] <|
-                    List.map pathView path
+treeView : Tree -> Html Msg
+treeView tree =
+    let
+        olStyle =
+            style
+                [ ( "borderLeft", "1px solid lightgray" )
+                , ( "margin", "5px 25px" )
+                , ( "padding", "5px 25px" )
                 ]
+    in
+        case tree of
+            Tree a [] ->
+                li [] [ text a ]
+
+            Tree a tree ->
+                li []
+                    [ text a
+                    , ol [ olStyle ] <|
+                        List.map treeView tree
+                    ]
