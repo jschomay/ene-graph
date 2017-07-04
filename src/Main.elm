@@ -121,37 +121,47 @@ buildGraph startingEngineModel rules =
             else
                 a :: list
 
-        recurOrStop name engineModel nodes =
+        recurOrStop : String -> String -> Engine.Model -> ( List Edge, List Node ) -> ( List Edge, List Node )
+        recurOrStop from to engineModel acc =
             if Engine.getEnding engineModel == Nothing then
-                addIfUnique (Node.fromName [ name ]) (checkAllInteractables engineModel nodes)
+                acc
+                    |> generateAllPaths engineModel to
+                    |> Tuple.mapFirst (\edges -> Edge from to :: edges)
+                    |> Tuple.mapSecond (\nodes -> addIfUnique (Node.fromName [ to ]) nodes)
             else
-                addIfUnique (Node.fromName [ name ++ " *Ending*" ]) nodes
+                acc
+                    |> Tuple.mapFirst (\edges -> Edge from (to ++ " *Ending*") :: edges)
+                    |> Tuple.mapSecond (\nodes -> addIfUnique (Node.fromName [ to ++ " *Ending*" ]) nodes)
 
-        findMatcingRule : Engine.Model -> String -> List Node -> List Node
-        findMatcingRule engineModel interactable nodes =
+        findMatcingRule : Engine.Model -> String -> String -> ( List Edge, List Node ) -> ( List Edge, List Node )
+        findMatcingRule engineModel from interactable acc =
             case Tuple.mapFirst (worldChanged engineModel) <| Engine.update interactable engineModel of
                 -- normal rule match with changes
                 ( Just newEngineModel, Just ruleName ) ->
-                    recurOrStop (interactable ++ " -> " ++ ruleName) newEngineModel nodes
+                    recurOrStop from (interactable ++ " -> " ++ ruleName) newEngineModel acc
 
                 ( Just newEngineModel, Nothing ) ->
                     -- default rule match (take an item or move to a location)
-                    recurOrStop (interactable ++ " -> default (take / go)") newEngineModel nodes
+                    recurOrStop from (interactable ++ " -> default (take / go)") newEngineModel acc
 
                 ( Nothing, Just ruleName ) ->
                     -- rule with no changes
-                    addIfUnique (Node.fromName [ interactable ++ " -> " ++ ruleName ]) nodes
+                    acc
 
+                -- including nodes that don't change state is just too messy!
+                -- |> Tuple.mapFirst (\edges -> Edge from (interactable ++ " -> " ++ ruleName) :: edges)
+                -- |> Tuple.mapSecond (addIfUnique <| Node.fromName [ interactable ++ " -> " ++ ruleName ])
                 ( Nothing, Nothing ) ->
                     -- no matching rules
-                    nodes
+                    acc
 
-        checkAllInteractables engineModel nodes =
+        generateAllPaths : Engine.Model -> String -> ( List Edge, List Node ) -> ( List Edge, List Node )
+        generateAllPaths engineModel from acc =
             getAllInteractables engineModel
-                |> List.foldl (findMatcingRule engineModel) nodes
+                |> List.foldl (findMatcingRule engineModel from) acc
 
         walkStory =
-            (,) [] <| checkAllInteractables startingEngineModel []
+            generateAllPaths startingEngineModel "*Start*" ( [], [ Node.fromName [ "*Start*" ] ] )
     in
         uncurry Graph.init walkStory
 
@@ -165,7 +175,7 @@ buildTree startingEngineModel rules =
                     Just <|
                         if Engine.getEnding newEngineModel == Nothing then
                             Tree (interactable ++ " -> " ++ ruleName) <|
-                                checkAllInteractables newEngineModel
+                                generateAllPaths newEngineModel
                         else
                             Tree (interactable ++ " -> " ++ ruleName ++ " *Ending*") []
 
@@ -173,7 +183,7 @@ buildTree startingEngineModel rules =
                     Just <|
                         if Engine.getEnding newEngineModel == Nothing then
                             Tree (interactable ++ " -> default (take / go)") <|
-                                checkAllInteractables newEngineModel
+                                generateAllPaths newEngineModel
                         else
                             Tree (interactable ++ " -> default (take / go) *Ending*") []
 
@@ -183,11 +193,11 @@ buildTree startingEngineModel rules =
                 ( Nothing, Nothing ) ->
                     Nothing
 
-        checkAllInteractables engineModel =
+        generateAllPaths engineModel =
             getAllInteractables engineModel
                 |> List.filterMap (findMatcingRule engineModel)
     in
-        Tree "*Start*" <| checkAllInteractables startingEngineModel
+        Tree "*Start*" <| generateAllPaths startingEngineModel
 
 
 getIds : List Entity -> List String
