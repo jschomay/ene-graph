@@ -1,4 +1,4 @@
-module Main exposing (..)
+port module Main exposing (..)
 
 import Engine exposing (..)
 import Html exposing (..)
@@ -8,25 +8,26 @@ import Tuple exposing (..)
 import Manifest exposing (..)
 import Rules exposing (rulesData)
 import ClientTypes exposing (..)
-import Graph exposing (Graph)
 import Graph.GraphViz as GraphViz
+import Graph exposing (Graph)
 import Graph.Node as Node exposing (Node)
 import Graph.Edge as Edge exposing (Edge)
 
 
 type alias Model =
     { engineModel : Engine.Model
-    , tree : Tree
     , graph : Graph Node
+    , loading : Bool
     }
-
-
-type Tree
-    = Tree String (List Tree)
 
 
 type Msg
     = Interact String
+    | Loaded
+
+
+type Tree a
+    = Tree a (List (Tree a))
 
 
 main : Program Never Model Msg
@@ -35,7 +36,7 @@ main =
         { init = init
         , view = view
         , update = update
-        , subscriptions = always Sub.none
+        , subscriptions = subscribe
         }
 
 
@@ -68,13 +69,27 @@ init =
             , moveCharacterToLocation "Wolf" "Woods"
             , moveCharacterToLocation "Grandma" "Grandma's house"
             ]
+
+        graph =
+            buildGraph engineModel rules
     in
         ( { engineModel = engineModel
-          , tree = buildTree engineModel rules
-          , graph = buildGraph engineModel rules
+          , graph = graph
+          , loading = True
           }
-        , Cmd.none
+        , drawGraph <| GraphViz.string graph
         )
+
+
+port drawGraph : String -> Cmd msg
+
+
+port loaded : (Bool -> msg) -> Sub msg
+
+
+subscribe : Model -> Sub Msg
+subscribe model =
+    loaded (always Loaded)
 
 
 getAllInteractables : Engine.Model -> List String
@@ -126,11 +141,11 @@ buildGraph startingEngineModel rules =
             if Engine.getEnding engineModel == Nothing then
                 acc
                     |> generateAllPaths engineModel to
-                    |> Tuple.mapFirst (\edges -> Edge from to :: edges)
+                    |> Tuple.mapFirst (\edges -> addIfUnique (Edge from to) edges)
                     |> Tuple.mapSecond (\nodes -> addIfUnique (Node.fromName [ to ]) nodes)
             else
                 acc
-                    |> Tuple.mapFirst (\edges -> Edge from (to ++ " *Ending*") :: edges)
+                    |> Tuple.mapFirst (\edges -> addIfUnique (Edge from (to ++ " *Ending*")) edges)
                     |> Tuple.mapSecond (\nodes -> addIfUnique (Node.fromName [ to ++ " *Ending*" ]) nodes)
 
         findMatcingRule : Engine.Model -> String -> String -> ( List Edge, List Node ) -> ( List Edge, List Node )
@@ -138,11 +153,11 @@ buildGraph startingEngineModel rules =
             case Tuple.mapFirst (worldChanged engineModel) <| Engine.update interactable engineModel of
                 -- normal rule match with changes
                 ( Just newEngineModel, Just ruleName ) ->
-                    recurOrStop from (interactable ++ " -> " ++ ruleName) newEngineModel acc
+                    recurOrStop from ruleName newEngineModel acc
 
                 ( Just newEngineModel, Nothing ) ->
                     -- default rule match (take an item or move to a location)
-                    recurOrStop from (interactable ++ " -> default (take / go)") newEngineModel acc
+                    recurOrStop from ("default (take / go) " ++ interactable) newEngineModel acc
 
                 ( Nothing, Just ruleName ) ->
                     -- rule with no changes
@@ -166,7 +181,7 @@ buildGraph startingEngineModel rules =
         uncurry Graph.init walkStory
 
 
-buildTree : Engine.Model -> Rules -> Tree
+buildTree : Engine.Model -> Rules -> Tree String
 buildTree startingEngineModel rules =
     let
         findMatcingRule engineModel interactable =
@@ -225,20 +240,28 @@ pluckRules =
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    model ! []
+    case msg of
+        Loaded ->
+            { model | loading = False } ! []
+
+        _ ->
+            model ! []
 
 
 view : Model -> Html Msg
 view model =
-    div []
-        [ h2 [] [ text "Graph:" ]
-        , textarea [ rows 30, cols 150 ] [ text <| GraphViz.string model.graph ]
-        , h2 [] [ text "Tree:" ]
-        , ol [] [ treeView model.tree ]
+    div [ style [ ( "textAlign", "center" ) ] ]
+        [ div [ id "graph" ] []
+        , div []
+            (if model.loading then
+                [ text "Loading..." ]
+             else
+                []
+            )
         ]
 
 
-treeView : Tree -> Html Msg
+treeView : Tree String -> Html Msg
 treeView tree =
     let
         olStyle =
