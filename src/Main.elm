@@ -17,6 +17,7 @@ type alias Model =
     { engineModel : Engine.Model
     , graph : Graph Node
     , loading : Bool
+    , showNonChangingRules : Bool
     }
 
 
@@ -55,26 +56,36 @@ init =
                 |> Engine.changeWorld startingState
 
         startingState =
-            [ moveTo "Cottage"
-            , loadScene "start"
-            , addLocation "Cottage"
-            , addLocation "River"
-            , addLocation "Woods"
-            , addLocation "Grandma's house"
-            , moveItemToLocation "Cape" "Cottage"
-            , moveItemToLocation "Basket of food" "Cottage"
-            , moveCharacterToLocation "Little Red Riding Hood" "Cottage"
-            , moveCharacterToLocation "Mother" "Cottage"
-            , moveCharacterToLocation "Wolf" "Woods"
-            , moveCharacterToLocation "Grandma" "Grandma's house"
+            [ loadScene "learnOfMystery"
+            , moveTo "Home"
+            , moveItemToLocation "Umbrella" "Home"
+            , moveItemToLocationFixed "VegatableGarden" "Garden"
+            , addLocation "Home"
+            , addLocation "Garden"
+            , moveCharacterToLocation "Harry" "Garden"
+            , moveItemToLocation "Pint" "Pub"
             ]
 
+        -- [ moveTo "Cottage"
+        -- , loadScene "start"
+        -- , addLocation "Cottage"
+        -- , addLocation "River"
+        -- , addLocation "Woods"
+        -- , addLocation "Grandma's house"
+        -- , moveItemToLocation "Cape" "Cottage"
+        -- , moveItemToLocation "Basket of food" "Cottage"
+        -- , moveCharacterToLocation "Little Red Riding Hood" "Cottage"
+        -- , moveCharacterToLocation "Mother" "Cottage"
+        -- , moveCharacterToLocation "Wolf" "Woods"
+        -- , moveCharacterToLocation "Grandma" "Grandma's house"
+        -- ]
         graph =
-            buildGraph engineModel rules
+            buildGraph False engineModel rules
     in
         ( { engineModel = engineModel
           , graph = graph
           , loading = True
+          , showNonChangingRules = False
           }
         , drawGraph <| GraphViz.string graph
         )
@@ -129,8 +140,8 @@ worldEq old new =
         - if the world is the same, return nothing (or the full path, but mark as a dead end)
         - if the world changed, recur from top
 -}
-buildGraph : Engine.Model -> Rules -> Graph Node
-buildGraph startingEngineModel rules =
+buildGraph : Bool -> Engine.Model -> Rules -> Graph Node
+buildGraph showNonChangingRules startingEngineModel rules =
     let
         addIfUnique a list =
             if List.member a list then
@@ -141,86 +152,93 @@ buildGraph startingEngineModel rules =
         beenHereBefore currentWorldState previousStates =
             List.any (worldEq currentWorldState) previousStates
 
-        findMatcingRule : Int -> Engine.Model -> String -> String -> ExploredPaths -> ExploredPaths
-        findMatcingRule depth currentWorldState lastRule currentlyExploring acc =
+        findMatcingRule : List Edge -> Engine.Model -> String -> String -> ExploredPaths -> ExploredPaths
+        findMatcingRule currentPath currentWorldState lastRule currentlyExploring acc =
             let
                 ( nextWorldState, maybeMatchedRule ) =
                     Engine.update currentlyExploring currentWorldState
+
+                edge a b =
+                    Edge "#000000" a b
+
+                node name =
+                    Node.fromName [ name ]
             in
-                case maybeMatchedRule of
-                    Just matchedRule ->
-                        if Engine.getEnding nextWorldState /= Nothing then
-                            let
-                                x =
-                                    Debug.log "* reahed an ending" <| toString depth ++ " - " ++ currentlyExploring
-                            in
-                                -- only a matched rule can set an ending
-                                { acc
-                                    | previousStates = nextWorldState :: acc.previousStates
-                                    , edges = addIfUnique (Edge lastRule matchedRule) acc.edges
-                                    , nodes = addIfUnique (Node.fromName [ matchedRule ]) acc.nodes
-                                }
-                        else if beenHereBefore nextWorldState (currentWorldState :: acc.previousStates) then
-                            let
-                                x =
-                                    Debug.log "reached a rule with no changes or a loop" <| toString depth ++ " - " ++ currentlyExploring
-                            in
-                                -- just "flavor" (not enough room in graph to show)
-                                -- or dead end! (or loop?)
-                                acc
+                case
+                    ( maybeMatchedRule
+                    , Engine.getEnding nextWorldState
+                    , beenHereBefore nextWorldState acc.previousStates
+                    )
+                of
+                    ( Just matchedRule, Just ending, _ ) ->
+                        -- ending - path complete
+                        { acc
+                            | paths = addIfUnique (currentPath ++ [ (edge lastRule matchedRule) ]) acc.paths
+                            , edges = addIfUnique (edge lastRule matchedRule) acc.edges
+                            , nodes = addIfUnique (node matchedRule) acc.nodes
+                        }
+
+                    ( Just matchedRule, Nothing, True ) ->
+                        -- non-changing rule, just "flavor"
+                        if showNonChangingRules && (not <| List.member (Node.fromName [ matchedRule ]) acc.nodes) then
+                            { acc
+                                | edges = addIfUnique (edge lastRule matchedRule) acc.edges
+                                , nodes = addIfUnique (node matchedRule) acc.nodes
+                            }
                         else
-                            let
-                                x =
-                                    Debug.log "* continuing to explore" <| toString depth ++ " - " ++ currentlyExploring
-                            in
-                                -- rule with changes
-                                explore (depth + 1)
-                                    nextWorldState
-                                    matchedRule
-                                    { acc
-                                        | previousStates = nextWorldState :: acc.previousStates
-                                        , edges = addIfUnique (Edge lastRule matchedRule) acc.edges
-                                        , nodes = addIfUnique (Node.fromName [ matchedRule ]) acc.nodes
-                                    }
+                            acc
 
-                    Nothing ->
-                        let
-                            x =
-                                Debug.log "reach a loop from a default rule" <| toString depth ++ " - " ++ currentlyExploring
-                        in
-                            if beenHereBefore nextWorldState (currentWorldState :: acc.previousStates) then
-                                -- loop
-                                acc
-                            else
-                                let
-                                    x =
-                                        Debug.log "* continuing to explore (from default rule)" <| toString depth ++ " - " ++ currentlyExploring
-                                in
-                                    -- default rule
-                                    ("default (take / go) " ++ currentlyExploring)
-                                        |> \matchedRule ->
-                                            explore (depth + 1)
-                                                nextWorldState
-                                                matchedRule
-                                                { acc
-                                                    | previousStates = nextWorldState :: acc.previousStates
-                                                    , edges = addIfUnique (Edge lastRule matchedRule) acc.edges
-                                                    , nodes = addIfUnique (Node.fromName [ matchedRule ]) acc.nodes
-                                                }
+                    ( Just matchedRule, Nothing, _ ) ->
+                        -- story continues - keep exploring
+                        explore
+                            (currentPath ++ [ (edge lastRule matchedRule) ])
+                            nextWorldState
+                            matchedRule
+                            { acc
+                                | previousStates = nextWorldState :: acc.previousStates
+                                , edges = addIfUnique (edge lastRule matchedRule) acc.edges
+                                , nodes = addIfUnique (node matchedRule) acc.nodes
+                            }
 
-        explore : Int -> Engine.Model -> String -> ExploredPaths -> ExploredPaths
-        explore depth currentWorldState lastRule acc =
+                    -- only a matched rule can set an ending, so no need to check for endings here
+                    ( Nothing, _, True ) ->
+                        -- default rule creates a loop -- stop exploring
+                        acc
+
+                    ( Nothing, _, False ) ->
+                        -- default rule (take item/go to location) - keep exploring, but don't add to graph
+                        explore
+                            currentPath
+                            nextWorldState
+                            lastRule
+                            { acc | previousStates = nextWorldState :: acc.previousStates }
+
+        explore : List Edge -> Engine.Model -> String -> ExploredPaths -> ExploredPaths
+        explore currentPath currentWorldState lastRule acc =
             getAllInteractables currentWorldState
-                |> List.foldl (findMatcingRule depth currentWorldState lastRule) acc
+                |> List.foldl (findMatcingRule currentPath currentWorldState lastRule) acc
 
-        { previousStates, edges, nodes } =
-            explore 1 startingEngineModel "Begining" <| ExploredPaths [ startingEngineModel ] [] [ Node.fromName [ "Begining" ] ]
+        { previousStates, paths, edges, nodes } =
+            explore [] startingEngineModel "Begining" <| ExploredPaths [ startingEngineModel ] [] [] [ Node.fromName [ "Begining" ] ]
+
+        selectedPath =
+            Maybe.withDefault [ Edge "" "" "" ] <| List.head <| List.drop 0 paths
+
+        tracePath edge =
+            if List.member edge selectedPath then
+                { edge | color = "#FF0000" }
+            else
+                edge
+
+        highlighedPath =
+            List.map tracePath edges
     in
-        Graph.init edges nodes
+        Graph.init highlighedPath nodes
 
 
 type alias ExploredPaths =
     { previousStates : List Engine.Model
+    , paths : List (List Edge)
     , edges : List Edge
     , nodes : List Node
     }
