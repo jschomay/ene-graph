@@ -7,9 +7,12 @@ app.ports.drawGraph.subscribe(function(src) {
     totalMemory:16777216
   })
   var parser = new DOMParser();
-  var output = document.querySelector('#graph');;
-  var svg = parser.parseFromString(graph, "image/svg+xml");
-  output.appendChild(svg.documentElement);
+  var newGraph = parser.parseFromString(graph, "image/svg+xml");
+  var containerEl = document.querySelector('#graph');;
+  var oldGraph = containerEl.firstChild;
+
+  containerEl.replaceChild(newGraph.documentElement, oldGraph);
+
   app.ports.loaded.send(true);
 });
 

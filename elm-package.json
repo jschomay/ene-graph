@@ -4,12 +4,13 @@
     "repository": "https://github.com/user/project.git",
     "license": "BSD3",
     "source-directories": [
-        ".",
+        "./src",
         "../elm-interactive-story-starter/src",
         "../elm-network-graph/src"
     ],
     "exposed-modules": [],
     "dependencies": {
+        "elm-community/graph": "3.0.2 <= v < 4.0.0",
         "elm-lang/core": "5.1.1 <= v < 6.0.0",
         "elm-lang/html": "2.0.0 <= v < 3.0.0",
         "jschomay/elm-narrative-engine": "3.0.0 <= v < 4.0.0"
