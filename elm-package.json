@@ -5,8 +5,7 @@
     "license": "BSD3",
     "source-directories": [
         "./src",
-        "../elm-interactive-story-starter/src",
-        "../elm-network-graph/src"
+        "../elm-interactive-story-starter/src"
     ],
     "exposed-modules": [],
     "dependencies": {

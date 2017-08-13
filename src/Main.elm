@@ -6,21 +6,17 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Dict exposing (..)
 import Manifest exposing (..)
-import Rules exposing (rulesData)
+import Rules exposing (..)
 import ClientTypes exposing (..)
-import Graph.GraphViz as GraphViz
-import Graph exposing (Graph)
-import Graph.Node as Node exposing (Node)
-import Graph.Edge as Edge exposing (Edge)
+import Graph exposing (..)
 import Graphbuilder
 
 
 type alias Model =
     { engineModel : Engine.Model
-    , graph : Graph Node
+    , graph : Graph ( String, Bool ) String
     , loading : Bool
-    , showNonChangingRules : Bool
-    , paths : List (List Edge)
+    , paths : List (List (Edge String))
     , highlightPath : Maybe Int
     }
 
@@ -67,30 +63,16 @@ init =
             , moveItemToLocation "Pint" "Pub"
             ]
 
-        -- [ moveTo "Cottage"
-        -- , loadScene "start"
-        -- , addLocation "Cottage"
-        -- , addLocation "River"
-        -- , addLocation "Woods"
-        -- , addLocation "Grandma's house"
-        -- , moveItemToLocation "Cape" "Cottage"
-        -- , moveItemToLocation "Basket of food" "Cottage"
-        -- , moveCharacterToLocation "Little Red Riding Hood" "Cottage"
-        -- , moveCharacterToLocation "Mother" "Cottage"
-        -- , moveCharacterToLocation "Wolf" "Woods"
-        -- , moveCharacterToLocation "Grandma" "Grandma's house"
-        -- ]
         ( paths, graph ) =
-            Graphbuilder.build False engineModel rules
+            Graphbuilder.build engineModel rules
     in
         ( { engineModel = engineModel
           , graph = graph
           , loading = True
-          , showNonChangingRules = False
           , paths = paths
           , highlightPath = Nothing
           }
-        , drawGraph <| GraphViz.string graph
+        , drawGraph <| Graphbuilder.toGraphViz graph
         )
 
 
@@ -141,22 +123,53 @@ update msg model =
 
                 Just path ->
                     ( { model | highlightPath = Just i, loading = True }
-                    , drawGraph <| GraphViz.string <| Graphbuilder.highlightPath path model.graph
+                    , drawGraph <| Graphbuilder.toGraphViz <| Graphbuilder.highlightPath (color i) path model.graph
                     )
 
         _ ->
             model ! []
 
 
+colors : List String
+colors =
+    [ "orange"
+    , "green"
+    , "blue"
+    , "purple"
+    , "red"
+    ]
+
+
+color : Int -> String
+color index =
+    colors
+        |> List.drop (index % List.length colors)
+        |> List.head
+        |> Maybe.withDefault "white"
+
+
 view : Model -> Html Msg
 view model =
     div [ style [ ( "textAlign", "center" ) ] ] <|
         [ ul [ class "paths" ] <|
-            List.indexedMap (\i _ -> li [ onClick <| HighlightPath i ] [ text <| toString <| i + 1 ])
-                model.paths
+            [ h3 [] [ text "Choose a path:" ] ]
+                ++ List.indexedMap
+                    (\i _ ->
+                        li
+                            [ onClick <| HighlightPath i
+                            , class <|
+                                if model.highlightPath == Just i then
+                                    "active"
+                                else
+                                    ""
+                            , style [ ( "backgroundColor", color i ) ]
+                            ]
+                            [ text <| Basics.toString <| i + 1 ]
+                    )
+                    model.paths
         , div [ id "graph" ] [ span [] [] ]
         ]
             ++ if model.loading then
-                [ div [ class "loading" ] [ text "loading..." ] ]
+                [ div [ class "loading" ] [ span [] <| [ text "loading..." ] ] ]
                else
                 []

@@ -1,9 +1,8 @@
-module Graphbuilder exposing (build, highlightPath)
+module Graphbuilder exposing (build, highlightPath, toGraphViz)
 
-import Graph exposing (Graph)
-import Graph.Node as Node exposing (Node)
-import Graph.Edge as Edge exposing (Edge)
+import Graph exposing (..)
 import Engine exposing (..)
+import Dict
 
 
 getAllInteractables : Engine.Model -> List String
@@ -38,9 +37,9 @@ worldEq old new =
 
 type alias ExploredPaths =
     { previousStates : List Engine.Model
-    , paths : List (List Edge)
-    , edges : List Edge
-    , nodes : List Node
+    , paths : List (List (Edge String))
+    , edges : List (Edge String)
+    , nodes : List (Node ( String, Bool ))
     }
 
 
@@ -52,9 +51,19 @@ type alias ExploredPaths =
         - if the world is the same, return nothing (or the full path, but mark as a dead end)
         - if the world changed, recur from top
 -}
-build : Bool -> Engine.Model -> Rules -> ( List (List Edge), Graph Node )
-build showNonChangingRules startingEngineModel rules =
+build : Engine.Model -> Rules -> ( List (List (Edge String)), Graph ( String, Bool ) String )
+build startingEngineModel rules =
     let
+        rulesMap =
+            Dict.keys rules
+                |> List.indexedMap (flip (,))
+                |> Dict.fromList
+
+        getRuleId ruleName =
+            Dict.get ruleName rulesMap
+                |> Maybe.map ((+) 1)
+                |> Maybe.withDefault -1
+
         addIfUnique a list =
             if List.member a list then
                 list
@@ -64,17 +73,17 @@ build showNonChangingRules startingEngineModel rules =
         beenHereBefore currentWorldState previousStates =
             List.any (worldEq currentWorldState) previousStates
 
-        findMatcingRule : List Edge -> Engine.Model -> String -> String -> ExploredPaths -> ExploredPaths
+        edge from to =
+            Edge from.id (getRuleId to) "white"
+
+        node ruleName end =
+            Node (getRuleId ruleName) ( ruleName, end )
+
+        findMatcingRule : List (Edge String) -> Engine.Model -> Node ( String, Bool ) -> String -> ExploredPaths -> ExploredPaths
         findMatcingRule currentPath currentWorldState lastRule currentlyExploring acc =
             let
                 ( nextWorldState, maybeMatchedRule ) =
                     Engine.update currentlyExploring currentWorldState
-
-                edge a b =
-                    Edge "#000000" a b
-
-                node name =
-                    Node.fromName [ name ]
             in
                 case
                     ( maybeMatchedRule
@@ -85,31 +94,25 @@ build showNonChangingRules startingEngineModel rules =
                     ( Just matchedRule, Just ending, _ ) ->
                         -- ending - path complete
                         { acc
-                            | paths = addIfUnique (currentPath ++ [ (edge lastRule matchedRule) ]) acc.paths
+                            | paths = addIfUnique (currentPath ++ [ edge lastRule matchedRule ]) acc.paths
                             , edges = addIfUnique (edge lastRule matchedRule) acc.edges
-                            , nodes = addIfUnique (node matchedRule) acc.nodes
+                            , nodes = addIfUnique (node matchedRule True) acc.nodes
                         }
 
                     ( Just matchedRule, Nothing, True ) ->
                         -- non-changing rule, just "flavor"
-                        if showNonChangingRules && (not <| List.member (Node.fromName [ matchedRule ]) acc.nodes) then
-                            { acc
-                                | edges = addIfUnique (edge lastRule matchedRule) acc.edges
-                                , nodes = addIfUnique (node matchedRule) acc.nodes
-                            }
-                        else
-                            acc
+                        acc
 
-                    ( Just matchedRule, Nothing, _ ) ->
+                    ( Just matchedRule, Nothing, False ) ->
                         -- story continues - keep exploring
                         explore
-                            (currentPath ++ [ (edge lastRule matchedRule) ])
+                            (currentPath ++ [ edge lastRule matchedRule ])
                             nextWorldState
-                            matchedRule
+                            (node matchedRule False)
                             { acc
                                 | previousStates = nextWorldState :: acc.previousStates
                                 , edges = addIfUnique (edge lastRule matchedRule) acc.edges
-                                , nodes = addIfUnique (node matchedRule) acc.nodes
+                                , nodes = addIfUnique (node matchedRule False) acc.nodes
                             }
 
                     -- only a matched rule can set an ending, so no need to check for endings here
@@ -123,29 +126,79 @@ build showNonChangingRules startingEngineModel rules =
                             currentPath
                             nextWorldState
                             lastRule
-                            { acc | previousStates = nextWorldState :: acc.previousStates }
+                            { acc
+                                | previousStates = nextWorldState :: acc.previousStates
+                            }
 
-        explore : List Edge -> Engine.Model -> String -> ExploredPaths -> ExploredPaths
+        explore : List (Edge String) -> Engine.Model -> Node ( String, Bool ) -> ExploredPaths -> ExploredPaths
         explore currentPath currentWorldState lastRule acc =
             getAllInteractables currentWorldState
                 |> List.foldl (findMatcingRule currentPath currentWorldState lastRule) acc
 
         { previousStates, paths, edges, nodes } =
-            explore [] startingEngineModel "Begining" <| ExploredPaths [ startingEngineModel ] [] [] [ Node.fromName [ "Begining" ] ]
+            explore [] startingEngineModel (Node 0 ( "Begin", False )) <| ExploredPaths [ startingEngineModel ] [] [] [ Node 0 ( "Begin", False ) ]
     in
-        ( paths, Graph.init edges nodes )
+        ( paths, Graph.fromNodesAndEdges nodes edges )
 
 
-highlightPath : List Edge -> Graph Node -> Graph Node
-highlightPath path graph =
+highlightPath : String -> List (Edge String) -> Graph ( String, Bool ) String -> Graph ( String, Bool ) String
+highlightPath color path graph =
     let
         tracePath edge =
             if List.member edge path then
-                { edge | color = "#FF0000" }
+                { edge | label = color }
             else
                 edge
 
         highlighedPath =
-            List.map tracePath graph.edges
+            List.map tracePath <| edges graph
     in
-        Graph.init highlighedPath graph.nodes
+        Graph.fromNodesAndEdges (nodes graph) highlighedPath
+
+
+toGraphViz : Graph ( String, Bool ) String -> String
+toGraphViz graph =
+    let
+        edgesString =
+            List.map edge (edges graph)
+                |> String.join "\n"
+
+        nodesString =
+            List.map node (nodes graph)
+                |> String.join "\n"
+
+        edgeStyle : Edge String -> String
+        edgeStyle edge =
+            "penwidth=3"
+
+        edge ({ from, to, label } as edge) =
+            Basics.toString from
+                ++ " -> "
+                ++ Basics.toString to
+                ++ " [color=\""
+                ++ label
+                ++ "\" "
+                ++ edgeStyle edge
+                ++ "];"
+
+        nodeStyle : Node ( String, Bool ) -> String
+        nodeStyle node =
+            let
+                color =
+                    if Tuple.second node.label then
+                        "yellow"
+                    else
+                        "white"
+            in
+                "fillcolor=" ++ color ++ " style=\"filled,rounded\" fontname=arial"
+
+        node : Node ( String, Bool ) -> String
+        node node =
+            Basics.toString node.id
+                ++ " [shape=box "
+                ++ nodeStyle node
+                ++ " label=\""
+                ++ Tuple.first node.label
+                ++ "\"];"
+    in
+        "digraph Paths { graph [bgcolor=black] rankdir=TB\n" ++ nodesString ++ edgesString ++ "}"
